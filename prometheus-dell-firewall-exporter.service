@@ -1,0 +1,12 @@
+[Unit]
+Description=Exporter for Dell OS10 BGP
+
+[Service]
+User=root
+Type=simple
+ExecStart=/usr/local/bin/prometheus-dell-firewall-exporter.py
+KillMode=process
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
