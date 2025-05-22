@@ -126,6 +126,7 @@ habilite o serviço para ser inicializado durante o reboot:
 ```
 
 
+
 ## 3. Alterações do arquivo de configuração no Agente
 O arquivo de configuração do agente (**/etc/default/prometheus-dell-firewall-exporter.yaml**) precisa ser alterado para se ajustar ao prometheus rodando em ambiente de produção. O atual conteúdo possui as seguintes linhas:
 
@@ -138,4 +139,5 @@ timeout: intervalo que o agente utiliza para gerar informações atualizadas das
   
   
 
-
+## 3. Testes adicionais
+Para testes, o programa curl http://127.0.0.1:8081 poderá ser executado e a saída capturada para análises e ajustes
