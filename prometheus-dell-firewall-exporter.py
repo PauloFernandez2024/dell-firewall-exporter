@@ -15,8 +15,8 @@ from prometheus_client import start_http_server
 from prometheus_client.core import Gauge, GaugeMetricFamily, CounterMetricFamily, REGISTRY
 
 def get_configuration():
-    #file = "/etc/default/prometheus-dell-firewall-exporter.yaml"
-    file = "prometheus-dell-firewall-exporter.yaml"
+    file = "/etc/default/prometheus-dell-firewall-exporter.yaml"
+    #file = "prometheus-dell-firewall-exporter.yaml"
     with open(file,"r") as file_object:
         generator_obj = yaml.load_all(file_object,Loader=yaml.SafeLoader)
         for data in generator_obj:
