@@ -56,7 +56,6 @@ def reorganize_metrics(data):
                                 'channel': channel,
                                 'value': val
                             })
-
     return result
 
 
@@ -69,7 +68,6 @@ def unify_metrics(stats_pool):
     return dict(result)
 
 
-
 def merge_stats_pool(stats_pool):
     def recursive_merge(target, source):
         for key, value in source.items():
@@ -80,7 +78,6 @@ def merge_stats_pool(stats_pool):
                 target.setdefault(key, []).extend(value)
             else:
                 target[key] = value
-
     merged = {}
     for entry in stats_pool:
         recursive_merge(merged, copy.deepcopy(entry))
@@ -287,7 +284,6 @@ class FirewallCollector(object):
                                 metric.add_metric(label_list, result)
                         yield metric
 
-
         stats = protocols.get_protocol_metrics()
         for group, values in self.sockets.items():
             for value in values:
@@ -314,7 +310,6 @@ class FirewallCollector(object):
                 metric.add_metric([node], node_value)
             yield metric
 
-
         metric = GaugeMetricFamily("processes_openfiles", "Open Files", labels=['command', 'pid'])
         stats = procs.get_openfiles()
         for proc in stats['processes']:
@@ -323,7 +318,6 @@ class FirewallCollector(object):
             pid = proc['pid']
             metric.add_metric([command, pid], open_fds)
         yield metric
-
 
         cpu_data = moncpu.get_cpu_scaling_info()
         if cpu_data:
@@ -335,14 +329,12 @@ class FirewallCollector(object):
                 metric.add_metric([core, current, governor], '1')
             yield metric
 
-
         stats = moncpu.get_rapl_power()
         if stats is not None:
             metric = GaugeMetricFamily("cpu_power_watts", "CPU Power", labels=['metric'])
             for metr, metr_value in stats.items():
                 metric.add_metric([metr], metr_value)
             yield metric
-
 
         metric = GaugeMetricFamily("ipmi", "IpmiTool", labels=['metric'])
         stats = moncpu.get_ipmi()
