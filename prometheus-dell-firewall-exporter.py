@@ -1,7 +1,8 @@
 import os
 import time
 import re
-from collections import Counter
+from collections import Counter, defaultdict
+import copy
 import json
 import yaml
 import physicalFunction
@@ -13,15 +14,77 @@ from metrics_descriptions_sorted import metrics_descriptions
 from prometheus_client import start_http_server
 from prometheus_client.core import Gauge, GaugeMetricFamily, CounterMetricFamily, REGISTRY
 
-
 def get_configuration():
-    file = "/etc/default/prometheus-dell-firewall-exporter.yaml"
-    #file = "prometheus-dell-firewall-exporter.yaml"
+    #file = "/etc/default/prometheus-dell-firewall-exporter.yaml"
+    file = "prometheus-dell-firewall-exporter.yaml"
     with open(file,"r") as file_object:
         generator_obj = yaml.load_all(file_object,Loader=yaml.SafeLoader)
         for data in generator_obj:
             config_data = data
     return config_data
+
+
+def reorganize_metrics(data):
+    result = {'rx_queues': {}, 'tx_queues': {}, 'channels': {} }
+    for type in ['rx_queues', 'tx_queues', 'channels']:
+        if type not in data:
+            continue
+        for grp in data[type]:
+            for category, metrics in grp.items():
+                if category not in result[type]:
+                    result[type][category] = defaultdict(list)
+                for metric in metrics:
+                    interface = metric.get('interface')
+                    queue = None
+                    channel = None
+                    if 'queue' in metric:
+                        queue = metric.get('queue')
+                    elif 'channel' in metric:
+                        channel = metric.get('channel')
+                    for key, val in metric.items():
+                        if key in ('interface', 'queue', 'channel'):
+                            continue
+                        if queue is not None:
+                            result[type][category][key].append({
+                                'interface': interface,
+                                'queue': queue,
+                                'value': val
+                            })
+                        elif channel is not None:
+                            result[type][category][key].append({
+                                'interface': interface,
+                                'channel': channel,
+                                'value': val
+                            })
+
+    return result
+
+
+def unify_metrics(stats_pool):
+    result= defaultdict(lambda: defaultdict(list))
+    for entry in stats_pool:
+        for category, sub_metrics in entry.items():
+            for metric_type, values in sub_metrics.items():
+                result[category][metric_type].extend(values)
+    return dict(result)
+
+
+
+def merge_stats_pool(stats_pool):
+    def recursive_merge(target, source):
+        for key, value in source.items():
+            if isinstance(value, dict):
+                node = target.setdefault(key, {})
+                recursive_merge(node, value)
+            elif isinstance(value, list):
+                target.setdefault(key, []).extend(value)
+            else:
+                target[key] = value
+
+    merged = {}
+    for entry in stats_pool:
+        recursive_merge(merged, copy.deepcopy(entry))
+    return merged
 
 
 gauge = Gauge('gauge_name', 'gauge description')
@@ -37,7 +100,7 @@ class FirewallCollector(object):
         '''
 
         self.physical_groups = {
-           'channelStats': { 'fields': [ 'arm', 'eq_rearm', 'events', 'force_irq', 'poll' ],
+           'net_channel': { 'fields': [ 'arm', 'eq_rearm', 'events', 'force_irq', 'poll' ],
                              'labels': [ 'interface', 'channel' ]
            },
 
@@ -122,6 +185,9 @@ class FirewallCollector(object):
                               'CLOSE_WAIT', 'LAST_ACK', 'LISTEN', 'CLOSING', 'UNKNOWN' ]
         }
 
+        stats_virtual_pool = []
+        stats_pool = []
+
         for iface in physicalFunction.get_physical_interfaces():
             interface = iface['interface']
             type = iface['type']
@@ -133,18 +199,26 @@ class FirewallCollector(object):
                 pf = physicalFunction.get_vf(interface)
                 if pf is None:
                     pf = "unknown"
-                physicalInterfaces = GaugeMetricFamily('vf_interfaces','VF Interfaces Definitions',
-                                                           labels=['interface', 'pf', 'type', 'address', 'mtu', 'speed', 'duplex'])
+                metric_name = 'vf_interface' + "_" + interface
+                metric_name = metric_name.replace("-", "_")
+                physicalInterfaces = GaugeMetricFamily(metric_name, f"{interface} VF Interfaces Definitions",
+                                                       labels=['interface', 'pf', 'type', 'address', 'mtu', 'speed', 'duplex'])
                 physicalInterfaces.add_metric([interface, pf, type, address, mtu, speed, duplex], '1')
             else:
                 if 'PF' in type:
-                    physicalInterfaces = GaugeMetricFamily('pf_interfaces','PF Interfaces Definitions',
+                    metric_name = 'pf_interface' + "_" + interface
+                    metric_name = metric_name.replace("-", "_")
+                    physicalInterfaces = GaugeMetricFamily(metric_name, f"{interface} PF Interfaces Definitions",
                                                                labels=['interface', 'type', 'address', 'mtu', 'speed', 'duplex'])
                 elif 'PCI' in type:
-                    physicalInterfaces = GaugeMetricFamily('non_srvio_interfaces','non SRVIO Interfaces Definitions',
+                    metric_name = 'non_srvio_interface' + "_" + interface
+                    metric_name = metric_name.replace("-", "_")
+                    physicalInterfaces = GaugeMetricFamily(metric_name,f"{interface} non SRVIO Interfaces Definitions",
                                                                labels=['interface', 'type', 'address', 'mtu', 'speed', 'duplex'])
                 else:
-                    physicalInterfaces = GaugeMetricFamily('virtual_interfaces','Virtual Interfaces Definitions',
+                    metric_name = 'virtual_interface' + "_" + interface
+                    metric_name = metric_name.replace("-", "_")
+                    physicalInterfaces = GaugeMetricFamily(metric_name, f"{interface} Virtual Interfaces Definitions",
                                                                labels=['interface', 'type', 'address', 'mtu', 'speed', 'duplex'])
                 physicalInterfaces.add_metric([interface, type, address, mtu, speed, duplex], '1')
 
@@ -153,58 +227,69 @@ class FirewallCollector(object):
 
             if type != "Virtual - no hardware":
                 stats = physicalFunction.parse_ethtool_stats(interface)
-                for k,v in stats.items(): # rxqueues [ { net_load_rx
-                    for elem in v: # v =  net_load_rx: [ { 'interface', 'queue', <metric> --- rxErrors
-                        for elemk, elemv in elem.items(): # net_load_rx [{ 'interface', 'queue', <metric>
-                            if elemk in self.physical_groups:
-                                group = self.physical_groups[elemk]
-                                labels = group['labels']
-                                metric_value = None
-                                label_list = []
-                                for vdata in elemv:
-                                    metric_value = None
-                                    label_list = []
-                                    for name,value in vdata.items():
-                                        if name in labels:
-                                            label_list.append(value)
-                                        else:
-                                            metric_name = name
-                                            metric_value = value
-                                    if metric_value is not None:
-                                        nelemk = elemk
-                                        if 'rx' in nelemk and 'rx' in metric_name:
-                                            nelemk = nelemk.replace("_rx", "")
-                                        elif 'tx' in nelemk and 'tx' in metric_name:
-                                            nelemk = nelemk.replace("_tx", "")
-                                        metr = f"{nelemk}_{metric_name}"  
-                                        metr = metr.replace(" ", "_")
-                                        metric = GaugeMetricFamily(metr, f"{metrics_descriptions[metric_name]['description']}", labels=labels)
-                                        metric.add_metric(label_list, metric_value)
-                                        yield metric
+                new_stats = reorganize_metrics(stats)
+                stats_pool.append(new_stats)
             else:
                 stats = physicalFunction.parse_ethtool_virtual(interface)
-                if stats:
-                    for group, values in stats.items():
-                        if group in self.virtual_groups:
-                            gr = self.virtual_groups[group]
-                            labels = gr['labels']
+                stats_virtual_pool.append(stats)
+
+        if stats_pool:
+           new_stats = merge_stats_pool(stats_pool)
+           if new_stats:
+               for type in new_stats:
+                    queues = new_stats[type]
+                    for rxcategory in queues:
+                        group = self.physical_groups[rxcategory]
+                        labels = group['labels']
+                        for metric_name in queues[rxcategory]:
+                            categ = rxcategory
+                            if 'rx' in metric_name:
+                                categ = categ.replace("_rx", "")
+                            elif 'tx' in metric_name:
+                                categ = categ.replace("_tx", "")
+                            metr = f"{categ}_{metric_name}".replace(" ", "_")
+                            metric = GaugeMetricFamily(metr, f"{metrics_descriptions[metric_name]['description']}", labels=labels)
+                            for values in queues[rxcategory][metric_name]:
+                                result = None
+                                label_list = []
+                                for k,v in values.items():
+                                    if k != "value":
+                                        label_list.append(v)
+                                    else:
+                                        result = v
+                                if result is not None:
+                                    metric.add_metric(label_list, result)
+                            yield metric
+
+        if stats_virtual_pool:
+            new_stats = unify_metrics(stats_virtual_pool)
+            if new_stats:
+                for rxcategory in new_stats:
+                    group = self.physical_groups[rxcategory]
+                    labels = group['labels']
+                    for metric_name in new_stats[rxcategory]:
+                        categ = rxcategory
+                        if 'rx' in metric_name:
+                           categ = categ.replace("_rx", "")
+                        elif 'tx' in metric_name:
+                            categ = categ.replace("_tx", "")
+                        metr = f"{categ}_{metric_name}".replace(" ", "_")
+                        metric = GaugeMetricFamily(metr, f"{metrics_descriptions[metric_name]['description']}", labels=labels)
+                        for values in new_stats[rxcategory][metric_name]:
+                            result = None
+                            label_list = []
                             for k,v in values.items():
-                                if v is not None:
-                                    grupo = group
-                                    if 'rx' in grupo and 'rx' in k:
-                                        grupo = grupo.replace("_rx", "")
-                                    elif 'tx' in grupo and 'tx' in k:
-                                        grupo = grupo.replace("_tx", "")
-                                    metr = f"{grupo}_{k}" # net_load_rx + bytes
-                                    metr = metr.replace(" ", "_")
-                                    metric = GaugeMetricFamily(metr, f"{metrics_descriptions[k]['description']}", labels=labels)
-                                    label_list = [ interface ]
-                                    metric.add_metric(label_list, v)
-                                    yield metric
+                                if k != "value":
+                                    label_list.append(v)
+                                else:
+                                    result = v
+                            if result:
+                                metric.add_metric(label_list, result)
+                        yield metric
 
 
         stats = protocols.get_protocol_metrics()
-        for group, values in self.sockets.items():           
+        for group, values in self.sockets.items():
             for value in values:
                 metr = group + "_" + value
                 metric_value = stats[group].get(value)
@@ -214,7 +299,7 @@ class FirewallCollector(object):
                     yield metric
 
         stats = protocols.get_tcp_states()
-        for group, values in self.tcp_states.items():      
+        for group, values in self.tcp_states.items():
             for value in values:
                 metric_value = stats[group].get(value)
                 if metric_value is not None:
@@ -222,19 +307,9 @@ class FirewallCollector(object):
                     metric.add_metric([value], metric_value)
                     yield metric
 
-        pool_metrics = []
         stats = numa.get_nodes()
         for met_name, values in stats.items():
-            if 'numa' in met_name:
-                a_metr = met_name.split("_")
-                metr = a_metr[1]
-                title = met_name
-            else:
-                metr = met_name
-                title = 'numa' + "_" + met_name
-            if title not in pool_metrics:
-                metric = GaugeMetricFamily(title, f"{metrics_descriptions[metr]['description']}", labels=['node'])
-                pool_metrics.append(title)
+            metric = GaugeMetricFamily(met_name, f"{metrics_descriptions[met_name]['description']}", labels=['node'])
             for node, node_value in values.items():
                 metric.add_metric([node], node_value)
             yield metric
