@@ -7,10 +7,10 @@ statistic_groups = [ { 'net_load_rx': [ 'ucast pkts rx', 'mcast pkts rx', 'bcast
                        'net_fails_rx': [ 'pkts rx OOB', 'pkts rx err', 'drv dropped rx total', 'rx buf alloc fail' ],
                        'net_load_tx': [ 'TSO pkts tx', 'TSO bytes tx', 'ucast pkts tx', 'mcast pkts tx', 'bcast pkts tx' ],
                        'net_fails_tx': [ 'pkts tx err', 'pkts tx discard', 'drv dropped tx total', 'ring full', 'giant hdr' ] },
-                     
+
                      { 'net_load_rx' : [ 'octets', 'ucast_packets', 'mcast_packets', 'bcast_packets' ],
                        'net_fails_rx' : [ 'fcs_errors', 'discards', 'errors', 'frame_too_long_errors', 'undersize_packets'  ],
-                       'net_buffers_rx' : [ 'xon_pause_rcvd', 'xoff_pause_rcvd', 'rxbds_empty' ],	
+                       'net_buffers_rx' : [ 'xon_pause_rcvd', 'xoff_pause_rcvd', 'rxbds_empty' ],
                        'net_load_tx' : [ 'octets', 'ucast_packets', 'mcast_packets', 'bcast_packets' ],
                        'net_fails_tx' : [ 'mac_errors', 'discards', 'mac_errors', 'excessive_collisions' ],
                        'net_buffers_tx' : [ 'xon_sent', 'xoff_sent', 'comp_queue_full' ] },
@@ -24,7 +24,7 @@ statistic_groups = [ { 'net_load_rx': [ 'ucast pkts rx', 'mcast pkts rx', 'bcast
                        'net_load_tx': [ 'packets', 'bytes', 'broadcast_phy', 'multicast_phy' ],
                        'net_fails_tx': [ 'stopped', 'cqe_err', 'xdp_err', 'xdp_full', 'discards_phy', 'errors_phy' ],
                        'net_cpu_tx': [ 'tso_packets', 'tso_bytes', 'csum_partial', 'csum_none' ],
-                       'net_security_tx': [ 'encrypted_packets', 'tls_drop_bypass_req', 'tls_ooo' ] }, 
+                       'net_security_tx': [ 'encrypted_packets', 'tls_drop_bypass_req', 'tls_ooo' ] },
 
                      { 'net_load_rx': [ 'bytes', 'broadcast', 'multicast', 'packets' ],
                        'net_fails_rx': [ 'align_errors', 'errors', 'frame_errors', 'no_buffer_count' ],
@@ -87,7 +87,7 @@ def get_metric(interface, metric):
 def parse_ethtool_stats(interface):
     stats = {'rx_queues': [], 'tx_queues': [], 'channels': []}
     values = {}
-    queue = None 
+    queue = None
     try:
         output = subprocess.check_output(["ethtool", "-S", interface], text=True)
     except subprocess.CalledProcessError:
@@ -143,22 +143,22 @@ def parse_ethtool_stats(interface):
                         txLoad.append({'interface': interface, 'queue': q, k: v})
                     elif k in group['net_fails_tx']:
                         txErrors.append({'interface': interface, 'queue': q, k: v})
-        new_stats['tx_queues'].append({'net_load_tx': txLoad, 'net_fails_tx': txErrors}) 
+        new_stats['tx_queues'].append({'net_load_tx': txLoad, 'net_fails_tx': txErrors})
         stats = new_stats
-    
+
     elif values:
         for i in range(1, len(statistic_groups)):
             if search_model[i] in values:
                 group = statistic_groups[i]
-                stats = check_values(values, group)
-                break 
+                stats = check_values(values, interface, group)
+                break
     return stats
- 
 
-def check_values(values, grp): 
-    stats = {'rx_queues': [], 'tx_queues': [], 'channels': []}          
-    new_dict = {}
-    for key,val in grp: # exemplo net_load_rx, [ 'ucast pkts rx', 'mcast pkts rx', 'bcast pkts rx', 'LRO pkts rx', 'LRO byte rx' ]
+
+def check_values(values, interface, grp):
+    stats = {'rx_queues': [], 'tx_queues': [], 'channels': []}
+    for key,val in grp.items(): # exemplo net_load_rx, [ 'ucast pkts rx', 'mcast pkts rx', 'bcast pkts rx', 'LRO pkts rx', 'LRO byte rx' ]
+        new_dict = {}
         if 'rx' in key:
             prefix = 'rx'
         elif 'tx' in key:
@@ -187,9 +187,8 @@ def check_values(values, grp):
         elif prefix == 'rx':
             stats['rx_queues'].append({key: list(new_dict.values()) })
         elif prefix == 'tx':
-            stats['tx_queues'].append({key: list(new_dict.values()) })                        
+            stats['tx_queues'].append({key: list(new_dict.values()) })
     return stats
-
 
 
 def parse_ethtool_virtual(iface):
@@ -203,11 +202,12 @@ def parse_ethtool_virtual(iface):
             tx_packets = open(os.path.join(stat_dir, "tx_packets")).read().strip()
             rx_err = open(os.path.join(stat_dir, "rx_errors")).read().strip()
             tx_drop = open(os.path.join(stat_dir, "tx_dropped")).read().strip()
-            stats = { "net_load_rx": { "bytes": rx_bytes, "packets": rx_packets }, 
-                      "net_fails_rx": { "errors": rx_err },
-                      "net_load_tx": { "bytes": tx_bytes, "packets": tx_packets }, 
-                      "net_fails_tx": { "dropped": tx_drop }
+            stats = { "net_load_rx": {"bytes": [{"interface": iface, "value": rx_bytes}], "packets": [{"interface": iface, "value": rx_packets}]},
+                      "net_fails_rx": {"errors": [{"interface": iface, "value": rx_err}]},
+                      "net_load_tx": {"bytes": [{"interface": iface, "value": tx_bytes}], "packets": [{"interface": iface, "value": tx_packets}]},
+                      "net_fails_tx": {"dropped": [{"interface": iface, "value": tx_drop}]}
             }
         except Exception as err:
             return None
     return stats
+
