@@ -21,3 +21,4 @@ def get_nodes():
     except subprocess.CalledProcessError:
         return {}
 
+
